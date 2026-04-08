@@ -24,6 +24,24 @@ function Read-JsonFile {
     Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 }
 
+function Join-ProcessOutput {
+    param([object[]]$Output)
+
+    (@($Output) -join [Environment]::NewLine).Trim()
+}
+
+function Test-AsciiOnly {
+    param([string]$Value)
+
+    foreach ($char in $Value.ToCharArray()) {
+        if ([int][char]$char -gt 127) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Get-FrontMatter {
     param([string]$Path)
 
@@ -150,12 +168,14 @@ try {
     $env:CLAUDE_PLUGIN_ROOT = $repoRoot
     Remove-Item Env:CURSOR_PLUGIN_ROOT -ErrorAction SilentlyContinue
 
-    $psHookOutput = & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "hooks\session-start.ps1")
+    $psHookOutput = Join-ProcessOutput (& powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "hooks\session-start.ps1"))
+    Assert-True (Test-AsciiOnly $psHookOutput) "PowerShell hook output must stay ASCII-only so Windows PowerShell can consume it across code pages"
     $psHookJson = $psHookOutput | ConvertFrom-Json
     Assert-True ($null -ne $psHookJson.hookSpecificOutput) "PowerShell hook did not emit Claude-compatible payload"
     Assert-True ($psHookJson.hookSpecificOutput.additionalContext -match "qiushi:arming-thought") "PowerShell hook payload missing skill context"
 
-    $cmdHookOutput = & cmd.exe /d /c "set CLAUDE_PLUGIN_ROOT=$repoRoot && `"$repoRoot\hooks\run-hook.cmd`" session-start"
+    $cmdHookOutput = Join-ProcessOutput (& cmd.exe /d /c "set CLAUDE_PLUGIN_ROOT=$repoRoot && `"$repoRoot\hooks\run-hook.cmd`" session-start")
+    Assert-True (Test-AsciiOnly $cmdHookOutput) "run-hook.cmd output must stay ASCII-only so cmd and Windows PowerShell decode it consistently"
     $cmdHookJson = $cmdHookOutput | ConvertFrom-Json
     Assert-True ($null -ne $cmdHookJson.hookSpecificOutput) "run-hook.cmd did not emit Claude-compatible payload"
 } finally {
